@@ -463,16 +463,16 @@ function parseUnified(lines: string[], strict: boolean): Edit[] {
 }
 
 function resolveUPaths(s: USection): { old: string | null; nw: string | null } {
-  let old: string | null | undefined;
-  let nw: string | null | undefined;
-  if (s.pairOld !== undefined || s.pairNew !== undefined) {
-    old = s.pairOld;
-    nw = s.pairNew;
-  } else {
-    old = s.renameFrom !== undefined ? s.renameFrom : s.gitOld;
-    nw = s.renameTo !== undefined ? s.renameTo : s.gitNew;
-  }
-  return { old: old ?? null, nw: nw ?? null };
+  // SPEC section 6 names each side on its own: `--- <path>` names the old path and `+++ <path>`
+  // the new one; `rename from` / `rename to` name them when no `---`/`+++` pair does; the
+  // `diff --git` paths are used when nothing else names one. A lone `+++ ` line therefore names
+  // only the new path: it must not turn the section into a creation by leaving the old path
+  // unnamed (null), with the old path taken from rename / `diff --git` instead. `/dev/null`
+  // parses to null, which is a named "no file", not an unnamed side, so the fallback checks for
+  // undefined, not null.
+  const old = s.pairOld !== undefined ? s.pairOld : s.renameFrom !== undefined ? s.renameFrom : s.gitOld ?? null;
+  const nw = s.pairNew !== undefined ? s.pairNew : s.renameTo !== undefined ? s.renameTo : s.gitNew ?? null;
+  return { old, nw };
 }
 
 /** O, N and whether a `\` line follows the hunk's last context or `+` line. */
@@ -508,7 +508,10 @@ function applyHunks(model: FileModel, hunks: UHunk[], strict: boolean, path: str
       const atEnd = at === model.lines.length;
       const ins = nItems.map((it) => it.text);
       model.lines.splice(at, 0, ...ins);
-      if (atEnd) model.final = !lastBs;
+      // A hunk that inserts nothing writes nothing at the end, so the file's final break stays
+      // as it was: without this guard an empty hunk at the end would add a trailing break to a
+      // file that had none, although the hunk changed nothing.
+      if (atEnd && ins.length > 0) model.final = !lastBs;
       d += nItems.length;
       continue;
     }
